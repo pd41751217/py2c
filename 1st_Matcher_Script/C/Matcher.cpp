@@ -11,6 +11,7 @@
 #include <cmath>
 #include <future>
 #include <regex>
+#include <unordered_map> // Added for faster lookup
 
 #define THREAD_NUM 8
 
@@ -85,8 +86,9 @@ public:
         }
         
         for (const auto& row : data) {
-            for (size_t i = 0; i < row.size(); ++i) {
-                if (i > 0) file << ",";
+            // Skip the first column (index 0) when writing
+            for (size_t i = 1; i < row.size(); ++i) {
+                if (i > 1) file << ",";
                 file << "\"" << row[i] << "\"";
             }
             file << "\n";
@@ -149,11 +151,14 @@ public:
                                   const DataFrame& raw_daily_df) {
         std::vector<Row> matches;
         
+        int match_count = 0; // Counter for matches in this chunk
         for (const auto& [idx, row] : chunk) {
             try {
                 // Update status text
-                std::string status_msg = "Processing row " + std::to_string(idx) + "...";
-                SetWindowTextA(hStatusText, status_msg.c_str());
+                if (idx % 10000 == 0) {
+                    std::string status_msg = "Processing row " + std::to_string(idx) + "...";
+                    SetWindowTextA(hStatusText, status_msg.c_str());
+                }
                 
                 RowData hist_row = parseRowToDict(*row);
                 
@@ -193,9 +198,11 @@ public:
                     }
                     
                     if (is_match) {
-                        std::string match_msg = "***** Found matching result for row " + std::to_string(idx) + " *****";
-                        SetWindowTextA(hStatusText, match_msg.c_str());
-                        
+                        match_count++;
+                        if (match_count % 100 == 0) {
+                            std::string match_msg = "***** Found matching result for row " + std::to_string(idx) + " (" + std::to_string(match_count) + " matches) *****";
+                            SetWindowTextA(hStatusText, match_msg.c_str());
+                        }
                         Row matched_row = raw_daily_df[i];
                         matched_row.insert(matched_row.end(), row->begin(), row->end());
                         matches.push_back(matched_row);
@@ -323,6 +330,7 @@ public:
             
             // Save results
             if (!all_matches.empty()) {
+                SetWindowTextA(hStatusText, "Saving matches...");
                 // Remove empty rows
                 all_matches.erase(
                     std::remove_if(all_matches.begin(), all_matches.end(),
@@ -455,8 +463,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 SetWindowPos(hProcessButton, NULL, (width - 150) / 2, 90, 150, 30, SWP_NOZORDER);
                 
                 // Resize status text and progress bar
-                SetWindowPos(hStatusText, NULL, 10, 140, width - 20, 20, SWP_NOZORDER);
-                SetWindowPos(hProgressBar, NULL, 10, 170, width - 20, 20, SWP_NOZORDER);
+                SetWindowPos(hStatusText, NULL, 10, 140, width - 20, 30, SWP_NOZORDER);
+                SetWindowPos(hProgressBar, NULL, 10, 180, width - 20, 20, SWP_NOZORDER);
             }
             return 0;
         }
@@ -548,7 +556,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     
     // Status Text
     hStatusText = CreateWindow("STATIC", "Ready to process...", WS_VISIBLE | WS_CHILD | SS_LEFT,
-        10, 140, 870, 20, hMainWindow, NULL, hInstance, NULL);
+        10, 140, 870, 50, hMainWindow, NULL, hInstance, NULL);
     
     // Progress Bar
     hProgressBar = CreateWindow(PROGRESS_CLASS, NULL, WS_VISIBLE | WS_CHILD,
