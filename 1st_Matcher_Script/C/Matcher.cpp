@@ -12,6 +12,7 @@
 #include <future>
 #include <regex>
 #include <unordered_map> // Added for faster lookup
+#include <xlnt/xlnt.hpp> // Add this include for xlnt
 
 #define THREAD_NUM 8
 
@@ -53,6 +54,37 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 class CSVReader {
 public:
     static DataFrame readCSV(const std::string& filename) {
+        if (endsWith(filename, ".csv")) {
+            return readCSVFile(filename);
+        } else if (endsWith(filename, ".xlsx")) {
+            return readXLSXFile(filename);
+        } else {
+            throw std::runtime_error("Unsupported file type: " + filename);
+        }
+    }
+    
+    static void writeCSV(const DataFrame& data, const std::string& filename) {
+        std::ofstream file(filename);
+        if (!file.is_open()) {
+            throw std::runtime_error("Cannot create file: " + filename);
+        }
+        
+        for (const auto& row : data) {
+            for (size_t i = 0; i < row.size(); ++i) {
+                if (i > 0) file << ",";
+                file << "\"" << row[i] << "\"";
+            }
+            file << "\n";
+        }
+    }
+
+private:
+    static bool endsWith(const std::string& str, const std::string& suffix) {
+        return str.size() >= suffix.size() &&
+               str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+    }
+
+    static DataFrame readCSVFile(const std::string& filename) {
         DataFrame data;
         std::ifstream file(filename);
         if (!file.is_open()) {
@@ -78,21 +110,20 @@ public:
         }
         return data;
     }
-    
-    static void writeCSV(const DataFrame& data, const std::string& filename) {
-        std::ofstream file(filename);
-        if (!file.is_open()) {
-            throw std::runtime_error("Cannot create file: " + filename);
-        }
-        
-        for (const auto& row : data) {
-            // Skip the first column (index 0) when writing
-            for (size_t i = 1; i < row.size(); ++i) {
-                if (i > 1) file << ",";
-                file << "\"" << row[i] << "\"";
+
+    static DataFrame readXLSXFile(const std::string& filename) {
+        DataFrame data;
+        xlnt::workbook wb;
+        wb.load(filename);
+        auto ws = wb.active_sheet();
+        for (auto row : ws.rows(false)) {
+            Row row_data;
+            for (auto cell : row) {
+                row_data.push_back(cell.to_string());
             }
-            file << "\n";
+            data.push_back(row_data);
         }
+        return data;
     }
 };
 
@@ -254,7 +285,7 @@ public:
                 return;
             }
             
-            // Read daily file
+            // Read daily file (now supports .csv and .xlsx)
             SetWindowTextA(hStatusText, "Reading daily file...");
             DataFrame raw_daily_df = CSVReader::readCSV(daily_file);
             DataFrame daily_df = filterDailyData(raw_daily_df);
@@ -283,7 +314,7 @@ public:
                     std::string file_path = entry.path().string();
                     std::string file_name = entry.path().filename().string();
                     
-                    // Skip non-CSV files
+                    // Skip non-CSV/XLSX files
                     std::string ext = entry.path().extension().string();
                     if (ext != ".csv" && ext != ".xlsx") {
                         continue;
