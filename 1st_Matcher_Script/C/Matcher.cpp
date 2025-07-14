@@ -12,6 +12,8 @@
 #include <future>
 #include <regex>
 
+#define THREAD_NUM 8
+
 #ifdef _WIN32
 #include <windows.h>
 #include <commdlg.h>
@@ -142,7 +144,7 @@ public:
         }
     }
     
-    std::vector<Row> processChunk(const std::vector<std::pair<size_t, Row>>& chunk,
+    std::vector<Row> processChunk(const std::vector<std::pair<size_t, const Row*>>& chunk,
                                   const DataFrame& daily_df,
                                   const DataFrame& raw_daily_df) {
         std::vector<Row> matches;
@@ -153,7 +155,7 @@ public:
                 std::string status_msg = "Processing row " + std::to_string(idx) + "...";
                 SetWindowTextA(hStatusText, status_msg.c_str());
                 
-                RowData hist_row = parseRowToDict(row);
+                RowData hist_row = parseRowToDict(*row);
                 
                 for (size_t i = 0; i < daily_df.size(); ++i) {
                     bool is_match = true;
@@ -195,7 +197,7 @@ public:
                         SetWindowTextA(hStatusText, match_msg.c_str());
                         
                         Row matched_row = raw_daily_df[i];
-                        matched_row.insert(matched_row.end(), row.begin(), row.end());
+                        matched_row.insert(matched_row.end(), row->begin(), row->end());
                         matches.push_back(matched_row);
                     }
                 }
@@ -212,7 +214,7 @@ public:
     DataFrame filterDailyData(const DataFrame& raw_daily_df) {
         DataFrame filtered_data;
         
-        for (const auto& row : raw_daily_df) {
+        for (const Row& row : raw_daily_df) {
             Row filtered_row;
             
             // Extract column 0 (Player)
@@ -286,21 +288,19 @@ public:
                     DataFrame raw_hist_df = CSVReader::readCSV(file_path);
                     
                     // Create chunks for parallel processing
-                    std::vector<std::pair<size_t, Row>> all_rows;
+                    std::vector<std::pair<size_t, const Row*>> all_rows;
                     for (size_t i = 0; i < raw_hist_df.size(); ++i) {
-                        all_rows.emplace_back(i, raw_hist_df[i]);
+                        all_rows.emplace_back(i, &raw_hist_df[i]);
                     }
                     
-                    size_t num_threads = std::thread::hardware_concurrency();
-                    if (num_threads == 0) num_threads = 4;
-                    
+                    size_t num_threads = std::min<size_t>(THREAD_NUM, all_rows.size());
                     size_t chunk_size = std::ceil(static_cast<double>(all_rows.size()) / num_threads);
                     std::vector<std::future<std::vector<Row>>> futures;
                     
                     // Process chunks in parallel
                     for (size_t i = 0; i < all_rows.size(); i += chunk_size) {
                         size_t end = std::min(i + chunk_size, all_rows.size());
-                        std::vector<std::pair<size_t, Row>> chunk(all_rows.begin() + i, all_rows.begin() + end);
+                        std::vector<std::pair<size_t, const Row*>> chunk(all_rows.begin() + i, all_rows.begin() + end);
                         
                         futures.push_back(std::async(std::launch::async, [this, chunk, &daily_df, &raw_daily_df]() {
                             return processChunk(chunk, daily_df, raw_daily_df);
