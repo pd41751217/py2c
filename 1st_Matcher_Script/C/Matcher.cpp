@@ -16,6 +16,7 @@
 #include <windows.h>
 #include <commdlg.h>
 #include <shlobj.h>
+#include <commctrl.h>
 #endif
 
 // CSV/Excel-like data structure
@@ -31,6 +32,20 @@ const std::vector<std::string> daily_cols = {
 const std::vector<std::string> degree_cols = {
     "AQ", "AS", "AU", "AW", "AY", "BA", "BC", "BE", "BG", "BI", "BK"
 };
+
+// Global variables for GUI
+HWND hMainWindow;
+HWND hDailyEntry;
+HWND hHistEntry;
+HWND hProcessButton;
+HWND hStatusText;
+HWND hProgressBar;
+
+// Forward declaration for DataProcessor
+class DataProcessor;
+
+// Window procedure
+LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 class CSVReader {
 public:
@@ -134,7 +149,10 @@ public:
         
         for (const auto& [idx, row] : chunk) {
             try {
-                std::cout << "Processing row " << idx << "..." << std::endl;
+                // Update status text
+                std::string status_msg = "Processing row " + std::to_string(idx) + "...";
+                SetWindowTextA(hStatusText, status_msg.c_str());
+                
                 RowData hist_row = parseRowToDict(row);
                 
                 for (size_t i = 0; i < daily_df.size(); ++i) {
@@ -173,14 +191,17 @@ public:
                     }
                     
                     if (is_match) {
-                        std::cout << "***** Found matching result for row " << idx << " *****" << std::endl;
+                        std::string match_msg = "***** Found matching result for row " + std::to_string(idx) + " *****";
+                        SetWindowTextA(hStatusText, match_msg.c_str());
+                        
                         Row matched_row = raw_daily_df[i];
                         matched_row.insert(matched_row.end(), row.begin(), row.end());
                         matches.push_back(matched_row);
                     }
                 }
             } catch (const std::exception& e) {
-                std::cout << "Error occurred in loop: " << e.what() << std::endl;
+                std::string error_msg = "Error occurred in loop: " + std::string(e.what());
+                SetWindowTextA(hStatusText, error_msg.c_str());
                 continue;
             }
         }
@@ -214,16 +235,38 @@ public:
     
     void processFiles(const std::string& daily_file, const std::string& historical_folder) {
         try {
+            SetWindowTextA(hStatusText, "Starting processing...");
+            EnableWindow(hProcessButton, FALSE);
+            
             // Check if files exist
             if (!std::filesystem::exists(daily_file) || !std::filesystem::exists(historical_folder)) {
-                throw std::runtime_error("One or both files not found.");
+                MessageBoxA(hMainWindow, "One or both files not found.", "Error", MB_OK | MB_ICONERROR);
+                EnableWindow(hProcessButton, TRUE);
+                return;
             }
             
             // Read daily file
+            SetWindowTextA(hStatusText, "Reading daily file...");
             DataFrame raw_daily_df = CSVReader::readCSV(daily_file);
             DataFrame daily_df = filterDailyData(raw_daily_df);
             
             std::vector<Row> all_matches;
+            
+            // Count total files for progress
+            int total_files = 0;
+            for (const auto& entry : std::filesystem::directory_iterator(historical_folder)) {
+                if (entry.is_regular_file()) {
+                    std::string ext = entry.path().extension().string();
+                    if (ext == ".csv" || ext == ".xlsx") {
+                        total_files++;
+                    }
+                }
+            }
+            
+            SendMessage(hProgressBar, PBM_SETRANGE, 0, MAKELPARAM(0, total_files));
+            SendMessage(hProgressBar, PBM_SETPOS, 0, 0);
+            
+            int processed_files = 0;
             
             // Process each file in historical folder
             for (const auto& entry : std::filesystem::directory_iterator(historical_folder)) {
@@ -232,12 +275,13 @@ public:
                     std::string file_name = entry.path().filename().string();
                     
                     // Skip non-CSV files
-                    std::string ext = file_path.substr(file_path.find_last_of('.'));
+                    std::string ext = entry.path().extension().string();
                     if (ext != ".csv" && ext != ".xlsx") {
                         continue;
                     }
                     
-                    std::cout << "Processing file: " << file_name << std::endl;
+                    std::string status_msg = "Processing file: " + file_name;
+                    SetWindowTextA(hStatusText, status_msg.c_str());
                     
                     DataFrame raw_hist_df = CSVReader::readCSV(file_path);
                     
@@ -269,7 +313,11 @@ public:
                         all_matches.insert(all_matches.end(), chunk_matches.begin(), chunk_matches.end());
                     }
                     
-                    std::cout << "--------------- " << file_name << " Processed successfully ---------------" << std::endl;
+                    processed_files++;
+                    SendMessage(hProgressBar, PBM_SETPOS, processed_files, 0);
+                    
+                    std::string success_msg = "--------------- " + file_name + " Processed successfully ---------------";
+                    SetWindowTextA(hStatusText, success_msg.c_str());
                 }
             }
             
@@ -284,18 +332,29 @@ public:
                 
                 std::string output_path = daily_file.substr(0, daily_file.find_last_of('.')) + "_Matches.csv";
                 CSVReader::writeCSV(all_matches, output_path);
-                std::cout << "Processing finished. Results saved to: " << output_path << std::endl;
+                
+                std::string success_msg = "Processing finished. Results saved to: " + output_path;
+                SetWindowTextA(hStatusText, success_msg.c_str());
+                MessageBoxA(hMainWindow, success_msg.c_str(), "Success", MB_OK | MB_ICONINFORMATION);
             } else {
-                std::cout << "NO Matches found..." << std::endl;
+                SetWindowTextA(hStatusText, "NO Matches found...");
+                MessageBoxA(hMainWindow, "NO Matches found...", "No Results", MB_OK | MB_ICONWARNING);
             }
             
         } catch (const std::exception& e) {
-            std::cerr << "Error occurred: " << e.what() << std::endl;
+            std::string error_msg = "Error occurred: " + std::string(e.what());
+            SetWindowTextA(hStatusText, error_msg.c_str());
+            MessageBoxA(hMainWindow, error_msg.c_str(), "Error", MB_OK | MB_ICONERROR);
         }
+        
+        EnableWindow(hProcessButton, TRUE);
+        SendMessage(hProgressBar, PBM_SETPOS, 0, 0);
     }
 };
 
-#ifdef _WIN32
+DataProcessor* g_processor = nullptr;
+
+// File dialog functions
 std::string openFileDialog() {
     OPENFILENAME ofn;
     char szFile[260] = {0};
@@ -304,7 +363,7 @@ std::string openFileDialog() {
     ofn.lStructSize = sizeof(ofn);
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "CSV Files\0*.csv\0Excel Files\0*.xlsx\0All Files\0*.*\0";
+    ofn.lpstrFilter = "Excel Files\0*.xlsx\0CSV Files\0*.csv\0All Files\0*.*\0";
     ofn.nFilterIndex = 1;
     ofn.lpstrFileTitle = NULL;
     ofn.nMaxFileTitle = 0;
@@ -333,53 +392,185 @@ std::string openFolderDialog() {
     }
     return "";
 }
-#endif
 
-int main() {
-    std::cout << "Zmatcher C++ Version" << std::endl;
-    std::cout << "===================" << std::endl;
+// Button click handlers
+void OnBrowseDaily() {
+    std::string file_path = openFileDialog();
+    if (!file_path.empty()) {
+        SetWindowTextA(hDailyEntry, file_path.c_str());
+    }
+}
+
+void OnBrowseHist() {
+    std::string folder_path = openFolderDialog();
+    if (!folder_path.empty()) {
+        SetWindowTextA(hHistEntry, folder_path.c_str());
+    }
+}
+
+void OnProcess() {
+    char daily_path[260];
+    char hist_path[260];
     
-    DataProcessor processor;
+    GetWindowTextA(hDailyEntry, daily_path, sizeof(daily_path));
+    GetWindowTextA(hHistEntry, hist_path, sizeof(hist_path));
     
-#ifdef _WIN32
+    if (strlen(daily_path) == 0 || strlen(hist_path) == 0) {
+        MessageBoxA(hMainWindow, "Please select both daily file and historical folder.", "Error", MB_OK | MB_ICONERROR);
+        return;
+    }
+    
+    // Start processing in a separate thread
+    std::thread([daily_path, hist_path]() {
+        g_processor->processFiles(daily_path, hist_path);
+    }).detach();
+}
+
+// Window procedure
+LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+        case WM_CREATE:
+            return 0;
+            
+        case WM_SIZE: {
+            int width = LOWORD(lParam);
+            int height = HIWORD(lParam);
+            
+            // Resize controls based on window size
+            if (hDailyEntry && hHistEntry && hProcessButton && hStatusText && hProgressBar) {
+                // Calculate new positions and sizes
+                int labelWidth = 162; // 90% of original 180px
+                int entryWidth = width - labelWidth - 100; // Leave space for browse button
+                int buttonX = width - 90;
+                
+                // Resize and reposition controls
+                SetWindowPos(hDailyEntry, NULL, 165, 20, entryWidth, 20, SWP_NOZORDER);
+                SetWindowPos(hHistEntry, NULL, 165, 50, entryWidth, 20, SWP_NOZORDER);
+                
+                // Move browse buttons
+                SetWindowPos(GetDlgItem(hwnd, 1001), NULL, buttonX, 20, 80, 20, SWP_NOZORDER);
+                SetWindowPos(GetDlgItem(hwnd, 1002), NULL, buttonX, 50, 80, 20, SWP_NOZORDER);
+                
+                // Center process button
+                SetWindowPos(hProcessButton, NULL, (width - 150) / 2, 90, 150, 30, SWP_NOZORDER);
+                
+                // Resize status text and progress bar
+                SetWindowPos(hStatusText, NULL, 10, 140, width - 20, 20, SWP_NOZORDER);
+                SetWindowPos(hProgressBar, NULL, 10, 170, width - 20, 20, SWP_NOZORDER);
+            }
+            return 0;
+        }
+            
+        case WM_COMMAND:
+            switch (LOWORD(wParam)) {
+                case 1001: // Browse Daily button
+                    OnBrowseDaily();
+                    break;
+                case 1002: // Browse Hist button
+                    OnBrowseHist();
+                    break;
+                case 1003: // Process button
+                    OnProcess();
+                    break;
+            }
+            return 0;
+            
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            return 0;
+    }
+    return DefWindowProc(hwnd, uMsg, wParam, lParam);
+}
+
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+    // Initialize COM
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     
-    std::cout << "Select daily file..." << std::endl;
-    std::string daily_file = openFileDialog();
-    if (daily_file.empty()) {
-        std::cout << "No daily file selected. Exiting." << std::endl;
-        CoUninitialize();
-        return 1;
+    // Initialize common controls
+    INITCOMMONCONTROLSEX icex;
+    icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
+    icex.dwICC = ICC_PROGRESS_CLASS;
+    InitCommonControlsEx(&icex);
+    
+    // Register window class
+    const char* CLASS_NAME = "MatcherWindow";
+    WNDCLASS wc = {};
+    wc.lpfnWndProc = WindowProc;
+    wc.hInstance = hInstance;
+    wc.lpszClassName = CLASS_NAME;
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    
+    RegisterClass(&wc);
+    
+    // Create main window
+    hMainWindow = CreateWindowEx(
+        0,
+        CLASS_NAME,
+        "Matcher Processor with non-coloring",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_THICKFRAME | WS_MAXIMIZEBOX,
+        CW_USEDEFAULT, CW_USEDEFAULT, 900, 400,
+        NULL, NULL, hInstance, NULL
+    );
+    
+    if (hMainWindow == NULL) {
+        return 0;
     }
     
-    std::cout << "Select historical folder..." << std::endl;
-    std::string historical_folder = openFolderDialog();
-    if (historical_folder.empty()) {
-        std::cout << "No historical folder selected. Exiting." << std::endl;
-        CoUninitialize();
-        return 1;
+    // Create controls
+    // Daily File Label
+    CreateWindow("STATIC", "Daily File:", WS_VISIBLE | WS_CHILD,
+        10, 20, 162, 20, hMainWindow, NULL, hInstance, NULL);
+    
+    // Daily File Entry
+    hDailyEntry = CreateWindow("EDIT", "", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
+        165, 20, 543, 20, hMainWindow, NULL, hInstance, NULL);
+    
+    // Browse Daily Button
+    CreateWindow("BUTTON", "Browse", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        735, 20, 80, 20, hMainWindow, (HMENU)1001, hInstance, NULL);
+    
+    // Historical Folder Label
+    CreateWindow("STATIC", "Historical % Input File:", WS_VISIBLE | WS_CHILD,
+        10, 50, 162, 20, hMainWindow, NULL, hInstance, NULL);
+    
+    // Historical Folder Entry
+    hHistEntry = CreateWindow("EDIT", "", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
+        165, 50, 543, 20, hMainWindow, NULL, hInstance, NULL);
+    
+    // Browse Hist Button
+    CreateWindow("BUTTON", "Browse", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        735, 50, 80, 20, hMainWindow, (HMENU)1002, hInstance, NULL);
+    
+    // Process Button
+    hProcessButton = CreateWindow("BUTTON", "Process", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        375, 90, 150, 30, hMainWindow, (HMENU)1003, hInstance, NULL);
+    
+    // Status Text
+    hStatusText = CreateWindow("STATIC", "Ready to process...", WS_VISIBLE | WS_CHILD | SS_LEFT,
+        10, 140, 870, 20, hMainWindow, NULL, hInstance, NULL);
+    
+    // Progress Bar
+    hProgressBar = CreateWindow(PROGRESS_CLASS, NULL, WS_VISIBLE | WS_CHILD,
+        10, 170, 870, 20, hMainWindow, NULL, hInstance, NULL);
+    
+    // Initialize processor
+    g_processor = new DataProcessor();
+    
+    // Show window
+    ShowWindow(hMainWindow, nCmdShow);
+    UpdateWindow(hMainWindow);
+    
+    // Message loop
+    MSG msg = {};
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
     }
     
+    // Cleanup
+    delete g_processor;
     CoUninitialize();
-#else
-    // For non-Windows systems, use console input
-    std::string daily_file, historical_folder;
-    
-    std::cout << "Enter daily file path: ";
-    std::getline(std::cin, daily_file);
-    
-    std::cout << "Enter historical folder path: ";
-    std::getline(std::cin, historical_folder);
-#endif
-    
-    std::cout << "Daily file: " << daily_file << std::endl;
-    std::cout << "Historical folder: " << historical_folder << std::endl;
-    std::cout << "Processing..." << std::endl;
-    
-    processor.processFiles(daily_file, historical_folder);
-    
-    std::cout << "Press Enter to exit...";
-    std::cin.get();
     
     return 0;
 }
