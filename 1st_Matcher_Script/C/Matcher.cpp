@@ -194,8 +194,9 @@ public:
                 RowData hist_row = parseRowToDict(*row);
                 
                 for (size_t i = 0; i < daily_df.size(); ++i) {
-                    bool is_match = true;
                     const Row& daily_row = daily_df[i];
+                    if (daily_row[0] != hist_row.player) continue;
+                    bool is_match = true;
                     
                     // Check each column for matching
                     for (const auto& [col, hist_val] : hist_row.data) {
