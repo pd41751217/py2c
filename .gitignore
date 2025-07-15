@@ -1,2 +1,5 @@
-.vscode
 *.exe
+*.zip
+*.rar
+*.xlsx
+*.csv

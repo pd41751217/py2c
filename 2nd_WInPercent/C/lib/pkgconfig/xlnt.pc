@@ -1,0 +1,11 @@
+prefix=${pcfiledir}/../..
+Name: xlnt
+Description: cross-platform user-friendly xlsx library for C++11
+Version: 1.6.1
+URL: https://github.com/xlnt-community/xlnt
+includedir=include
+libdir=lib
+exec_prefix=
+
+Libs: "-L${libdir}" -lxlnt
+Cflags: "-I${includedir}"
